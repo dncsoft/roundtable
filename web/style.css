@@ -1525,6 +1525,9 @@ dialog form .row {
   flex-wrap: wrap;
   align-items: flex-end;
 }
+/* The room name takes the wider share; the optional group sits beside it. */
+dialog form .room-name-row label { flex: 1 1 160px; }
+dialog form .room-name-row label:first-child { flex-grow: 2; }
 .checks-fieldset {
   border: 1px solid var(--border);
   border-radius: 8px;

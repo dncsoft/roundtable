@@ -223,13 +223,27 @@ type RoomSpec struct {
 	// BlindFirstDefault is nil when omitted; new rooms then start discussions blind.
 	BlindFirstDefault *bool `json:"blind_first_default"`
 	// TurnTimeoutMinutes is the longest a turn may run; 0 is the default (turn_timeout.go).
-	TurnTimeoutMinutes int  `json:"turn_timeout_minutes"`
-	QuietDone          bool `json:"quiet_done"`
+	TurnTimeoutMinutes int    `json:"turn_timeout_minutes"`
+	QuietDone          bool   `json:"quiet_done"`
+	Group              string `json:"group"`
+}
+
+// cleanGroup trims a room list group name and checks its length.
+func cleanGroup(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if utf8.RuneCountInString(name) > maxGroupName {
+		return "", fmt.Errorf("그룹 이름은 %d자 이하여야 함", maxGroupName)
+	}
+	return name, nil
 }
 
 func (h *Hub) CreateRoom(spec RoomSpec) (*Room, error) {
 	if strings.TrimSpace(spec.Title) == "" {
 		return nil, fmt.Errorf("방 이름이 비어 있음")
+	}
+	group, err := cleanGroup(spec.Group)
+	if err != nil {
+		return nil, err
 	}
 	if spec.Mode == "" {
 		spec.Mode = agent.ModeRead
@@ -247,7 +261,7 @@ func (h *Hub) CreateRoom(spec RoomSpec) (*Room, error) {
 		}
 		spec.Workspace = absolute
 	}
-	r := &Room{ID: newID(), Title: spec.Title, CreatedAt: nowMs(), UpdatedAt: nowMs(), Workspace: spec.Workspace, Mode: spec.Mode, Note: spec.Note, MaxChain: spec.MaxChain, DiscussionRounds: spec.DiscussionRounds, Persona: spec.Persona, BlindFirstDefault: true, TurnTimeoutMinutes: spec.TurnTimeoutMinutes, QuietDone: spec.QuietDone}
+	r := &Room{ID: newID(), Title: spec.Title, CreatedAt: nowMs(), UpdatedAt: nowMs(), Workspace: spec.Workspace, Mode: spec.Mode, Note: spec.Note, MaxChain: spec.MaxChain, DiscussionRounds: spec.DiscussionRounds, Persona: spec.Persona, BlindFirstDefault: true, TurnTimeoutMinutes: spec.TurnTimeoutMinutes, QuietDone: spec.QuietDone, Group: group}
 	if spec.BlindFirstDefault != nil {
 		r.BlindFirstDefault = *spec.BlindFirstDefault
 	}
@@ -549,10 +563,11 @@ func (h *Hub) UpdateRoom(id string, patch RoomPatch) ([]byte, error) {
 		next.Archived = *patch.Archived
 	}
 	if patch.Group != nil {
-		next.Group = strings.TrimSpace(*patch.Group)
-		if utf8.RuneCountInString(next.Group) > maxGroupName {
-			return nil, fmt.Errorf("그룹 이름은 %d자 이하여야 함", maxGroupName)
+		g, err := cleanGroup(*patch.Group)
+		if err != nil {
+			return nil, err
 		}
+		next.Group = g
 	}
 	patched := map[string]bool{}
 	for _, pp := range patch.Participants {

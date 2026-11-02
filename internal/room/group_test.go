@@ -56,12 +56,16 @@ func TestRoomGroupPersists(t *testing.T) {
 	if _, err := hub.UpdateRoom(r.ID, RoomPatch{Group: ref("핫픽스")}); err != nil {
 		t.Fatal(err)
 	}
+	created, _ := hub.CreateRoom(RoomSpec{Title: "c", Mode: agent.ModeChat, Participants: []string{"claude"}, Group: "생성"})
 	hub2, err := NewHub(store, agent.NewRegistry(a), t.TempDir(), log.New(io.Discard, "", 0))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if s := roomSummary(t, hub2, r.ID); s.Group != "핫픽스" {
 		t.Fatalf("재시작 뒤 그룹: %q", s.Group)
+	}
+	if s := roomSummary(t, hub2, created.ID); s.Group != "생성" {
+		t.Fatalf("재시작 뒤 생성 시 그룹: %q", s.Group)
 	}
 }
 
@@ -86,5 +90,30 @@ func TestRoomGroupTooLong(t *testing.T) {
 	}
 	if s := roomSummary(t, h, r.ID); s.Group != max {
 		t.Fatalf("120자 그룹: %q", s.Group)
+	}
+}
+
+// A new room takes its group through the same check as PATCH.
+func TestRoomGroupOnCreate(t *testing.T) {
+	h, _ := newTestHub(t, &fakeProvider{id: "codex"})
+	spec := func(group string) RoomSpec {
+		return RoomSpec{Title: "g", Mode: agent.ModeChat, Participants: []string{"codex"}, Group: group}
+	}
+	max := strings.Repeat("가", 120)
+	for group, want := range map[string]string{"  " + max + "  ": max, "": ""} {
+		r, err := h.CreateRoom(spec(group))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s := roomSummary(t, h, r.ID); s.Group != want {
+			t.Fatalf("생성 시 그룹 %q: %q", group, s.Group)
+		}
+	}
+	before := len(h.Rooms())
+	if _, err := h.CreateRoom(spec(strings.Repeat("a", 121))); err == nil {
+		t.Fatal("121자 그룹으로 방이 만들어짐")
+	}
+	if n := len(h.Rooms()); n != before {
+		t.Fatalf("거절 뒤 방 수 %d, 이전 %d", n, before)
 	}
 }
