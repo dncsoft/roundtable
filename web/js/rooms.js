@@ -303,14 +303,19 @@ export function renderRoomList() {
 }
 
 // A collapsed group still shows that a hidden room in it runs or has unread answers.
-function buildGroupHead(key, rooms, marks, shown) {
-  const collapsed = collapsedGroups.has(key);
+// A search opens every group, so its hits and the bulk archive count match what is seen.
+function buildGroupHead(key, rooms, marks, shown, searching) {
+  const collapsed = !searching && collapsedGroups.has(key);
   const li = el("li", "room-group");
   const btn = el("button", "room-group-head");
   btn.type = "button";
   btn.dataset.group = key;
   btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
   btn.title = key.startsWith("g:") ? "그룹: " + rooms[0].group : rooms[0].workspace || "작업 폴더 없음";
+  if (searching) {
+    btn.disabled = true;
+    btn.title += "\n검색 중에는 모든 그룹을 펼쳐 보입니다";
+  }
   const caret = el("span", "caret", collapsed ? "▸" : "▾");
   caret.setAttribute("aria-hidden", "true");
   btn.append(caret, el("span", "name", roomGroupLabel(rooms[0])), el("span", "count", String(rooms.length)));
@@ -360,11 +365,11 @@ function buildRoomListItems(ul) {
     groups.get(key).push(r);
   }
   // A collapsed group keeps the open room's row, as an archived room that runs stays listed.
-  const shown = filtered.filter((r) => r.id === state.roomId || !collapsedGroups.has(roomGroupKey(r)));
+  const shown = filtered.filter((r) => q || r.id === state.roomId || !collapsedGroups.has(roomGroupKey(r)));
   if (menuOpenFor && !shown.some((r) => r.id === menuOpenFor)) menuOpenFor = "";
   if (renamingId && !shown.some((r) => r.id === renamingId)) { renamingId = ""; renameField = "title"; renameDraft = ""; }
   for (const [key, rooms] of groups) {
-    ul.appendChild(buildGroupHead(key, rooms, marks, shown));
+    ul.appendChild(buildGroupHead(key, rooms, marks, shown, !!q));
     for (const r of rooms) {
       if (!shown.includes(r)) continue;
       const isAct = r.id === state.roomId;

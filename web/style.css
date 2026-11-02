@@ -327,6 +327,8 @@ kbd {
   text-align: left;
 }
 .room-group-head:hover:not(:disabled) { background: transparent; color: var(--text); }
+/* While a search opens every group the head only labels it. */
+.room-group-head:disabled { opacity: 1; cursor: default; }
 .room-group-head .caret { flex: none; width: 10px; }
 .room-group-head .name {
   overflow: hidden;
