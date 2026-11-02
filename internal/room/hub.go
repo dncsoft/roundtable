@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"roundtable/internal/agent"
 )
@@ -22,6 +23,7 @@ const (
 	MaxParticipants = 32
 	defaultMaxChain = 4
 	defaultRounds   = 3
+	maxGroupName    = 120 // runes, the same as the room list input
 )
 
 // Hub owns every room, runs agent turns and fans events out to SSE clients.
@@ -548,6 +550,9 @@ func (h *Hub) UpdateRoom(id string, patch RoomPatch) ([]byte, error) {
 	}
 	if patch.Group != nil {
 		next.Group = strings.TrimSpace(*patch.Group)
+		if utf8.RuneCountInString(next.Group) > maxGroupName {
+			return nil, fmt.Errorf("그룹 이름은 %d자 이하여야 함", maxGroupName)
+		}
 	}
 	patched := map[string]bool{}
 	for _, pp := range patch.Participants {

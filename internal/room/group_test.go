@@ -1,6 +1,14 @@
 package room
 
-import "testing"
+import (
+	"io"
+	"log"
+	"strings"
+	"testing"
+	"unicode/utf8"
+
+	"roundtable/internal/agent"
+)
 
 func roomSummary(t *testing.T, h *Hub, id string) RoomSummary {
 	t.Helper()
@@ -37,5 +45,46 @@ func TestRoomGroupPatchAndSummary(t *testing.T) {
 	}
 	if s := roomSummary(t, h, r.ID); s.Group != "" {
 		t.Fatalf("그룹 해제: %q", s.Group)
+	}
+}
+
+func TestRoomGroupPersists(t *testing.T) {
+	a := &fakeProvider{id: "claude"}
+	store, _ := NewStore(t.TempDir())
+	hub, _ := NewHub(store, agent.NewRegistry(a), t.TempDir(), log.New(io.Discard, "", 0))
+	r, _ := hub.CreateRoom(RoomSpec{Title: "p", Mode: agent.ModeChat, Participants: []string{"claude"}})
+	if _, err := hub.UpdateRoom(r.ID, RoomPatch{Group: ref("핫픽스")}); err != nil {
+		t.Fatal(err)
+	}
+	hub2, err := NewHub(store, agent.NewRegistry(a), t.TempDir(), log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := roomSummary(t, hub2, r.ID); s.Group != "핫픽스" {
+		t.Fatalf("재시작 뒤 그룹: %q", s.Group)
+	}
+}
+
+// The list input stops at 120 characters; the API must not store more either.
+func TestRoomGroupTooLong(t *testing.T) {
+	h, r := newTestHub(t, &fakeProvider{id: "codex"})
+	if _, err := h.UpdateRoom(r.ID, RoomPatch{Group: ref("기존")}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tooLong := range []string{strings.Repeat("a", 121), strings.Repeat("😀", 121)} {
+		if _, err := h.UpdateRoom(r.ID, RoomPatch{Group: ref(tooLong), Title: ref("바뀌면 안 됨")}); err == nil {
+			t.Fatalf("%d자 그룹이 저장됨", utf8.RuneCountInString(tooLong))
+		}
+		if s := roomSummary(t, h, r.ID); s.Group != "기존" || s.Title == "바뀌면 안 됨" {
+			t.Fatalf("거절 뒤 요약: %+v", s)
+		}
+	}
+	// The limit counts characters, not bytes, after trimming.
+	max := strings.Repeat("가", 120)
+	if _, err := h.UpdateRoom(r.ID, RoomPatch{Group: ref("  " + max + "  ")}); err != nil {
+		t.Fatal(err)
+	}
+	if s := roomSummary(t, h, r.ID); s.Group != max {
+		t.Fatalf("120자 그룹: %q", s.Group)
 	}
 }

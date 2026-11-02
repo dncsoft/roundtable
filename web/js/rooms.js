@@ -133,12 +133,27 @@ const collapsedGroups = new Set((() => { try { return JSON.parse(localStorage.ge
 function saveCollapsedGroups() {
   try { localStorage.setItem(GROUPS_KEY, JSON.stringify([...collapsedGroups])); } catch { /* storage off: keep it for this page only */ }
 }
-const roomGroupKey = (r) => (r.group ? "g:" + r.group : "w:" + (r.workspace || ""));
+// A Windows path (drive letter or UNC) names the same folder whatever its case or
+// slashes; a POSIX path keeps both and only drops repeated and trailing slashes.
+function workspaceKey(ws) {
+  if (/^([A-Za-z]:|[\\/]{2}[^\\/])/.test(ws)) {
+    return (/^[\\/]{2}/.test(ws) ? "\\\\" : "") + ws.split(/[\\/]+/).filter(Boolean).join("\\").toLowerCase();
+  }
+  return (ws.startsWith("/") ? "/" : "") + ws.split("/").filter(Boolean).join("/");
+}
+function workspaceName(ws) {
+  const parts = ws.split(/[\\/]+/).filter(Boolean);
+  return parts[parts.length - 1] || ws;
+}
+// A group named like the room's own folder joins that folder's group.
+function roomGroupKey(r) {
+  if (r.group && !(r.workspace && r.group.toLowerCase() === workspaceName(r.workspace).toLowerCase())) return "g:" + r.group;
+  return r.workspace ? "w:" + workspaceKey(r.workspace) : "none";
+}
 function roomGroupLabel(r) {
-  if (r.group) return r.group;
+  if (roomGroupKey(r).startsWith("g:")) return r.group;
   if (!r.workspace) return "폴더 없음";
-  const parts = r.workspace.split(/[\\/]+/).filter(Boolean);
-  return parts[parts.length - 1] || r.workspace;
+  return workspaceName(r.workspace);
 }
 
 function closeRoomMenu(restoreFocus = true) {
@@ -287,19 +302,19 @@ export function renderRoomList() {
   }
 }
 
-// A collapsed group still shows that a room in it runs or has unread answers.
-function buildGroupHead(key, rooms, marks) {
+// A collapsed group still shows that a hidden room in it runs or has unread answers.
+function buildGroupHead(key, rooms, marks, shown) {
   const collapsed = collapsedGroups.has(key);
   const li = el("li", "room-group");
   const btn = el("button", "room-group-head");
   btn.type = "button";
   btn.dataset.group = key;
   btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
-  btn.title = rooms[0].group ? "그룹: " + rooms[0].group : rooms[0].workspace || "작업 폴더 없음";
+  btn.title = key.startsWith("g:") ? "그룹: " + rooms[0].group : rooms[0].workspace || "작업 폴더 없음";
   const caret = el("span", "caret", collapsed ? "▸" : "▾");
   caret.setAttribute("aria-hidden", "true");
   btn.append(caret, el("span", "name", roomGroupLabel(rooms[0])), el("span", "count", String(rooms.length)));
-  const hidden = collapsed ? rooms.map((r) => marks[r.id]).filter(Boolean) : [];
+  const hidden = collapsed ? rooms.filter((r) => !shown.includes(r)).map((r) => marks[r.id]).filter(Boolean) : [];
   if (hidden.length) {
     const active = hidden.includes("active");
     const label = active ? "실행 중인 방 있음" : "안 읽은 답 있음";
@@ -344,13 +359,14 @@ function buildRoomListItems(ul) {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(r);
   }
-  const shown = filtered.filter((r) => !collapsedGroups.has(roomGroupKey(r)));
+  // A collapsed group keeps the open room's row, as an archived room that runs stays listed.
+  const shown = filtered.filter((r) => r.id === state.roomId || !collapsedGroups.has(roomGroupKey(r)));
   if (menuOpenFor && !shown.some((r) => r.id === menuOpenFor)) menuOpenFor = "";
   if (renamingId && !shown.some((r) => r.id === renamingId)) { renamingId = ""; renameField = "title"; renameDraft = ""; }
   for (const [key, rooms] of groups) {
-    ul.appendChild(buildGroupHead(key, rooms, marks));
-    if (collapsedGroups.has(key)) continue;
+    ul.appendChild(buildGroupHead(key, rooms, marks, shown));
     for (const r of rooms) {
+      if (!shown.includes(r)) continue;
       const isAct = r.id === state.roomId;
       const li = el("li", (isAct ? "active" : "") + (r.archived ? " archived" : ""));
       if (renamingId === r.id) {
