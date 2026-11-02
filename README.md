@@ -143,7 +143,7 @@ Claude·Antigravity용 샌드박스 서버 옵션은 현재 없다. 다시 켜�
 
 #### MCP 없이 셸로 쓰기: `roundtable rt`
 
-MCP를 등록하지 않은 에이전트도 셸만 있으면 같은 도구를 쓸 수 있다. 명령 이름은 MCP 도구에서 `rt_`를 뺀 것이고, 인자 이름·검증·결과도 MCP와 같다. MCP는 도구 설명이 매 턴 문맥에 들어가지만, 셸 명령은 에이전트가 필요할 때 `help`만 읽으므로 평소 문맥 비용이 없다.
+MCP를 등록하지 않은 에이전트도 셸만 있으면 같은 도구를 쓸 수 있다. 명령 이름은 MCP 도구에서 `rt_`를 뺀 것이고, 인자 이름과 결과는 MCP와 같다. MCP는 도구 설명이 매 턴 문맥에 들어가지만, 셸 명령은 에이전트가 필요할 때 `help`만 읽으므로 평소 문맥 비용이 없다.
 
 ```
 roundtable rt help                                   # 명령 목록
@@ -157,6 +157,8 @@ roundtable rt create_room --title "작업 1" --workspace <폴더> --mode write -
 roundtable rt wait --rooms <방A>:<seq>,<방B>:<seq> --timeout_seconds 3600   # 먼저 끝난 방의 새 답을 받음
 roundtable rt usage --rooms <방A>,<방B>                                       # 방별·좌석별 토큰 합계
 ```
+
+`rt wait`는 셸에서 최대 86400초(1시간 조각으로 이어 대기), MCP에서 1~3600초를 받는다.
 
 결과는 stdout에 한 줄 JSON으로 나온다. 실패하면 사유를 stderr에 쓰고, 검증·실행 실패는 종료 코드 1, 명령 형식 오류는 2를 돌려준다. 정수는 `--rounds 2`, 참·거짓은 `--blind_first false`, 배열은 JSON(`--participants '[{"provider":"agy"}]'`)으로 쓴다. 다른 서버는 `roundtable rt --url http://127.0.0.1:8791 ...`로 지정한다(loopback만 허용). 에이전트에게 사용법을 알려 줄 때는 [skills/roundtable/SKILL.md](skills/roundtable/SKILL.md)를 스킬로 설치하거나 지침에 붙인다. 이 짧은 진입점은 오케스트레이션 플레이북·좌석 전달 규칙·공급사별 능력표·실패 대처를 담은 [에이전트 안내서](docs/AGENT_GUIDE.md)로 이어진다.
 

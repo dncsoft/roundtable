@@ -11,8 +11,7 @@ import (
 )
 
 // RunCLI runs one MCP tool from a shell: `<tool> --key value ...`. The tool
-// list, argument names and validation are the MCP ones, so an agent without MCP
-// gets the same contract and only pays for the help text it asks for.
+// list and argument names are the MCP ones; wait permits longer shell waits.
 func (s *Server) RunCLI(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		s.cliUsage(stdout)
@@ -42,7 +41,12 @@ func (s *Server) RunCLI(ctx context.Context, args []string, stdin io.Reader, std
 	if err != nil {
 		panic(err) // built from strings, numbers, booleans and decoded JSON
 	}
-	result, err := s.call(ctx, selected.Name, raw)
+	var result any
+	if selected.Name == "rt_wait" {
+		result, err = s.cliWait(ctx, input, 3600)
+	} else {
+		result, err = s.call(ctx, selected.Name, raw)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "오류: %v\n", err)
 		return 1
@@ -54,6 +58,40 @@ func (s *Server) RunCLI(ctx context.Context, args []string, stdin io.Reader, std
 	}
 	fmt.Fprintf(stdout, "%s\n", out)
 	return 0
+}
+
+// cliWait keeps the MCP limit on each call while allowing a longer shell wait.
+// chunkSeconds is an argument so tests can exercise multiple chunks quickly.
+func (s *Server) cliWait(ctx context.Context, input map[string]any, chunkSeconds int64) (any, error) {
+	return cliWaitChunks(ctx, input, chunkSeconds, s.call)
+}
+
+func cliWaitChunks(ctx context.Context, input map[string]any, chunkSeconds int64, call func(context.Context, string, json.RawMessage) (any, error)) (any, error) {
+	total, specified := input["timeout_seconds"].(int64)
+	if !specified {
+		total = 600
+	}
+	if total < 1 || total > 86400 {
+		return nil, fmt.Errorf("rt_wait.timeout_seconds: 정수 허용 범위를 벗어남 (1~86400)")
+	}
+	for remaining := total; ; {
+		chunk := min(remaining, chunkSeconds)
+		input["timeout_seconds"] = chunk
+		raw, err := json.Marshal(input)
+		if err != nil {
+			return nil, err
+		}
+		value, err := call(ctx, "rt_wait", raw)
+		if err != nil {
+			return nil, err
+		}
+		result := value.(*waitResult)
+		remaining -= chunk
+		if !result.TimedOut || len(result.Ready) != 0 || result.Asked || remaining == 0 {
+			return result, nil
+		}
+		input["rooms"] = result.Waiting
+	}
 }
 
 // cliArguments turns `--key value` / `--key=value` pairs into tool input using
@@ -152,5 +190,8 @@ func toolUsage(w io.Writer, t tool) {
 	if t.Name == "rt_create_room" {
 		fmt.Fprintln(w, `  participants 예: [{"provider":"agy","model":"gemini-4-argon","effort":"high","label":"Argon","role":"문구 검토"}]`)
 		fmt.Fprintln(w, `  기반 세션 포크 예: [{"provider":"codex","label":"작성","fork_from":{"room":"<기반 방ID>","seat":"<기반 좌석ID>"}}]`)
+	}
+	if t.Name == "rt_wait" {
+		fmt.Fprintln(w, "  셸은 최대 86400초(1시간 조각으로 이어 대기), MCP는 1~3600초.")
 	}
 }

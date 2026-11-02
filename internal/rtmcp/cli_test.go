@@ -4,11 +4,96 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"reflect"
+	"roundtable/internal/room"
 	"strings"
 	"testing"
 )
+
+func TestCLIWaitChunks(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		results   []*waitResult
+		fail      bool
+		wantCalls int
+	}{
+		{"timeout", []*waitResult{{TimedOut: true, Waiting: "r1:7"}, {TimedOut: true, Waiting: "r1:7"}, {TimedOut: true, Waiting: "r1:7"}}, false, 3},
+		{"ready", []*waitResult{{TimedOut: true, Waiting: "r1:7"}, {Ready: []*readResult{{}}}}, false, 2},
+		{"asked", []*waitResult{{TimedOut: true, Waiting: "r1:7"}, {Asked: true, Waiting: "r1:7"}}, false, 2},
+		{"sse error", []*waitResult{{TimedOut: true, Waiting: "r1:7"}}, true, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			input := map[string]any{"rooms": "r1", "timeout_seconds": int64(5), "max_chars": int64(42), "summary": true}
+			value, err := cliWaitChunks(context.Background(), input, 2, func(_ context.Context, name string, raw json.RawMessage) (any, error) {
+				var got map[string]any
+				if e := json.Unmarshal(raw, &got); e != nil {
+					t.Fatal(e)
+				}
+				wantRoom := "r1"
+				if calls > 0 {
+					wantRoom = "r1:7"
+				}
+				wantSeconds := float64(2)
+				if calls == 2 {
+					wantSeconds = 1
+				}
+				want := map[string]any{"rooms": wantRoom, "timeout_seconds": wantSeconds, "max_chars": float64(42), "summary": true}
+				if name != "rt_wait" || !reflect.DeepEqual(got, want) {
+					t.Fatalf("call %d: %s %v", calls, name, got)
+				}
+				calls++
+				if tc.fail && calls == tc.wantCalls {
+					return nil, errors.New("SSE disconnected")
+				}
+				return tc.results[calls-1], nil
+			})
+			if calls != tc.wantCalls || (err != nil) != tc.fail {
+				t.Fatalf("calls=%d value=%v err=%v", calls, value, err)
+			}
+			if !tc.fail && value != tc.results[len(tc.results)-1] {
+				t.Fatalf("last result changed: %v", value)
+			}
+		})
+	}
+}
+
+func TestCLIWaitChunksWithRealWait(t *testing.T) {
+	hub, s := waitHub(t, nil)
+	r, err := hub.CreateRoom(room.RoomSpec{Title: "방", Mode: "chat", Participants: []string{"claude"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := s.cliWait(context.Background(), map[string]any{"rooms": r.ID, "timeout_seconds": int64(2)}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := value.(*waitResult)
+	if !result.TimedOut || len(result.Ready) != 0 || result.Waiting != r.ID+":0" {
+		t.Fatalf("result: %+v", result)
+	}
+}
+
+func TestCLIWaitTimeoutLimits(t *testing.T) {
+	s := newHTTP(t, func(http.ResponseWriter, *http.Request) { t.Error("must not call HTTP") }, false)
+	for _, n := range []string{"0", "86401"} {
+		code, out, errOut := runCLI(s, "", "wait", "--rooms", "r1", "--timeout_seconds", n)
+		if code != 1 || out != "" || !strings.Contains(errOut, "1~86400") {
+			t.Errorf("%s: code=%d out=%q err=%q", n, code, out, errOut)
+		}
+	}
+	_, err := s.call(context.Background(), "rt_wait", json.RawMessage(`{"rooms":"r1","timeout_seconds":3601}`))
+	if err == nil || !strings.Contains(err.Error(), "1~3600") {
+		t.Fatalf("MCP limit: %v", err)
+	}
+	_, out, _ := runCLI(s, "", "wait", "--help")
+	if !strings.Contains(out, "86400초") || !strings.Contains(out, "1~3600초") {
+		t.Fatalf("wait help: %s", out)
+	}
+}
 
 func runCLI(s *Server, stdin string, args ...string) (int, string, string) {
 	var out, errOut bytes.Buffer

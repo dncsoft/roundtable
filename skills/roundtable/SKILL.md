@@ -37,5 +37,6 @@ Roundtable은 서로 다른 공급사의 AI CLI가 한 방에서 대화·리뷰�
 1. `roundtable rt list_rooms --limit 5` — 방과 좌석 id 확인. 좌석 상태·문맥 크기·마지막 답 요약은 `roundtable rt seats --rooms <방>,...`. 알맞은 방이 없으면 `create_room`(같은 프로젝트의 여러 작업이면 안내서의 기반 세션 포크).
 2. `roundtable rt post --room <방> --target <좌석> --text - < 지시.md` — 보낸 메시지의 `seq`를 받는다. 한 방만 짧게 기다릴 때는 `--wait_seconds 300`.
 3. `roundtable rt wait --rooms <방A>:<seqA>,<방B>:<seqB> --timeout_seconds 3600` — 먼저 끝난 방의 새 답(`ready[]`)과 남은 방(`waiting`)을 받는다. 셸 제한보다 길면 백그라운드로 실행한다. 폴링하지 않는다.
+   셸은 최대 86400초(1시간 조각으로 이어 대기), MCP는 1~3600초를 받는다.
 4. `roundtable rt read --room <방> --after_seq <seq>` — 답 원문. `roundtable rt usage --rooms <방>` — 좌석별 토큰.
 5. `roundtable rt decisions --room <방>` → 근거 확인 뒤 `update_decision --status active|dropped`. AGREE는 검증이 아니다.
