@@ -92,6 +92,14 @@ export async function setArchived(ids, archived) {
   if (failed.length) showAlert((archived ? "보관" : "보관 해제") + "하지 못한 방:\n" + failed.join("\n"));
 }
 
+// A blank group puts the room back in its workspace folder group.
+export async function setRoomGroup(id, group) {
+  const next = String(group || "").trim();
+  await api("PATCH", "/api/rooms/" + id, { group: next });
+  await loadRooms();
+  announce(next ? "방을 '" + next + "' 그룹에 넣었습니다." : "방을 작업 폴더 그룹으로 되돌렸습니다.");
+}
+
 export function exportRoom(id) {
   const a = document.createElement("a");
   a.href = "/api/rooms/" + id + "/export.md";
@@ -114,8 +122,24 @@ const ROOM_MODE = Object.freeze({
 // being renamed inline; both survive re-renders.
 let menuOpenFor = "";
 let renamingId = "";
+let renameField = "title"; // the inline editor changes the room "title" or its "group"
 let renameDraft = "";
 let rebuildingList = false;
+
+// Rooms are grouped by their group name, else by workspace folder. Collapsed groups
+// are remembered per browser.
+const GROUPS_KEY = "rt.roomGroupsCollapsed";
+const collapsedGroups = new Set((() => { try { return JSON.parse(localStorage.getItem(GROUPS_KEY) || "[]"); } catch { return []; } })());
+function saveCollapsedGroups() {
+  try { localStorage.setItem(GROUPS_KEY, JSON.stringify([...collapsedGroups])); } catch { /* storage off: keep it for this page only */ }
+}
+const roomGroupKey = (r) => (r.group ? "g:" + r.group : "w:" + (r.workspace || ""));
+function roomGroupLabel(r) {
+  if (r.group) return r.group;
+  if (!r.workspace) return "폴더 없음";
+  const parts = r.workspace.split(/[\\/]+/).filter(Boolean);
+  return parts[parts.length - 1] || r.workspace;
+}
 
 function closeRoomMenu(restoreFocus = true) {
   if (!menuOpenFor) return;
@@ -135,12 +159,13 @@ function openRoomMenu(id) {
   if (first) first.focus();
 }
 
-function beginRename(id) {
+function beginRename(id, field = "title") {
   const r = state.rooms.find((x) => x.id === id);
   if (!r) return;
   menuOpenFor = "";
   renamingId = id;
-  renameDraft = r.title;
+  renameField = field;
+  renameDraft = field === "group" ? r.group || "" : r.title;
   renderRoomList();
   const input = $("#room-list .room-rename-input");
   if (input) { input.focus(); input.select(); }
@@ -148,6 +173,7 @@ function beginRename(id) {
 
 function endRename() {
   renamingId = "";
+  renameField = "title";
   renameDraft = "";
   renderRoomList();
   const btn = $("#room-list li.active .room-item") || $("#room-list .room-item");
@@ -160,6 +186,7 @@ function buildRoomMenu(r) {
   pop.setAttribute("aria-label", r.title + " 방 동작");
   const items = [
     ["이름 바꾸기", () => beginRename(r.id)],
+    ["그룹 지정", () => beginRename(r.id, "group")],
     ["내보내기 (Markdown)", () => { closeRoomMenu(); exportRoom(r.id); }],
     [r.archived ? "보관 해제" : "보관 (목록에서 숨김)", () => { closeRoomMenu(); setArchived([r.id], !r.archived); }],
     ["삭제…", async () => {
@@ -187,12 +214,14 @@ function buildRoomMenu(r) {
 }
 
 function buildRenameRow(r) {
+  const isGroup = renameField === "group";
   const form = el("form", "room-rename");
   const input = el("input", "room-rename-input");
   input.type = "text";
   input.maxLength = 120;
   input.value = renameDraft;
-  input.setAttribute("aria-label", "새 방 이름 (Enter 저장, Esc 취소)");
+  if (isGroup) input.placeholder = "그룹 이름 (비우면 작업 폴더로 묶음)";
+  input.setAttribute("aria-label", isGroup ? "그룹 이름, 비우면 작업 폴더로 묶음 (Enter 저장, Esc 취소)" : "새 방 이름 (Enter 저장, Esc 취소)");
   input.oninput = () => { renameDraft = input.value; };
   input.onkeydown = (e) => {
     if (e.isComposing) return; // Enter/Esc that only settle an IME composition are not commands
@@ -203,16 +232,17 @@ function buildRenameRow(r) {
   let busy = false;
   const save = async () => {
     if (busy) return;
-    if (!input.value.trim() || input.value.trim() === r.title) { endRename(); return; }
+    const value = input.value.trim();
+    if (isGroup ? value === (r.group || "") : !value || value === r.title) { endRename(); return; }
     busy = true;
     input.disabled = true; // this also blurs the field; `busy` keeps the blur from saving twice
     try {
-      await renameRoom(r.id, input.value);
+      await (isGroup ? setRoomGroup(r.id, value) : renameRoom(r.id, input.value));
       endRename();
     } catch (err) {
       input.disabled = false;
       input.focus();
-      showAlert("방 이름을 바꾸지 못했습니다: " + err.message);
+      showAlert((isGroup ? "그룹을 지정하지 못했습니다: " : "방 이름을 바꾸지 못했습니다: ") + err.message);
     } finally {
       busy = false;
     }
@@ -257,6 +287,40 @@ export function renderRoomList() {
   }
 }
 
+// A collapsed group still shows that a room in it runs or has unread answers.
+function buildGroupHead(key, rooms, marks) {
+  const collapsed = collapsedGroups.has(key);
+  const li = el("li", "room-group");
+  const btn = el("button", "room-group-head");
+  btn.type = "button";
+  btn.dataset.group = key;
+  btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  btn.title = rooms[0].group ? "그룹: " + rooms[0].group : rooms[0].workspace || "작업 폴더 없음";
+  const caret = el("span", "caret", collapsed ? "▸" : "▾");
+  caret.setAttribute("aria-hidden", "true");
+  btn.append(caret, el("span", "name", roomGroupLabel(rooms[0])), el("span", "count", String(rooms.length)));
+  const hidden = collapsed ? rooms.map((r) => marks[r.id]).filter(Boolean) : [];
+  if (hidden.length) {
+    const active = hidden.includes("active");
+    const label = active ? "실행 중인 방 있음" : "안 읽은 답 있음";
+    const badge = el("span", active ? "room-spin" : "dot");
+    badge.title = label;
+    badge.setAttribute("role", "img");
+    badge.setAttribute("aria-label", label);
+    btn.appendChild(badge);
+  }
+  btn.onclick = () => {
+    if (collapsed) collapsedGroups.delete(key);
+    else collapsedGroups.add(key);
+    saveCollapsedGroups();
+    renderRoomList();
+    const again = $('#room-list .room-group-head[data-group="' + CSS.escape(key) + '"]');
+    if (again) again.focus();
+  };
+  li.appendChild(btn);
+  return li;
+}
+
 function buildRoomListItems(ul) {
   const q = state.roomSearch.trim().toLowerCase();
   // An archived room stays listed while it runs, so a running turn is never out of sight.
@@ -273,59 +337,71 @@ function buildRoomListItems(ul) {
   }
   // Every listed room, not only the search hits, so a search does not forget seen counts.
   const marks = unread.marks(state.rooms, state.roomId);
-  if (menuOpenFor && !filtered.some((r) => r.id === menuOpenFor)) menuOpenFor = "";
-  if (renamingId && !filtered.some((r) => r.id === renamingId)) { renamingId = ""; renameDraft = ""; }
+  // The list is newest first, so a group sits where its newest room would.
+  const groups = new Map();
   for (const r of filtered) {
-    const isAct = r.id === state.roomId;
-    const li = el("li", (isAct ? "active" : "") + (r.archived ? " archived" : ""));
-    if (renamingId === r.id) {
-      li.appendChild(buildRenameRow(r));
-      ul.appendChild(li);
-      continue;
-    }
-    // The whole row is the title: the mode is a 14px icon and the room actions open
-    // from the context menu (right-click, Shift+F10 or the menu key, long-press).
-    const btn = el("button", "room-item");
-    btn.type = "button";
-    btn.dataset.room = r.id;
-    if (isAct) btn.setAttribute("aria-current", "page");
-    btn.title = r.title + "\n" + ROOM_MODE[r.mode].name + " · 우클릭: 이름 바꾸기·삭제·내보내기";
-    btn.setAttribute("aria-description", ROOM_MODE[r.mode].name + ". Shift+F10으로 이름 바꾸기·삭제·내보내기 메뉴");
-    const icon = el("span", "mode-icon " + r.mode);
-    icon.innerHTML = ROOM_MODE[r.mode].icon;
-    icon.setAttribute("aria-hidden", "true");
-    btn.appendChild(icon);
-    btn.appendChild(el("span", "name", r.title));
-    const mark = marks[r.id];
-    if (mark) {
-      const label = mark === "active" ? "실행 중" : "안 읽은 답 있음";
-      const badge = el("span", mark === "active" ? "room-spin" : "dot");
-      badge.title = label;
-      badge.setAttribute("role", "img");
-      badge.setAttribute("aria-label", label);
-      btn.appendChild(badge);
-    }
-    btn.onclick = () => {
-      closeDrawers();
-      hooks.openRoom(r.id);
-    };
-    btn.oncontextmenu = (e) => {
-      e.preventDefault();
-      openRoomMenu(r.id);
-    };
-    // Not every browser turns Shift+F10 or the menu key into a contextmenu event.
-    btn.onkeydown = (e) => {
-      if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+    const key = roomGroupKey(r);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  }
+  const shown = filtered.filter((r) => !collapsedGroups.has(roomGroupKey(r)));
+  if (menuOpenFor && !shown.some((r) => r.id === menuOpenFor)) menuOpenFor = "";
+  if (renamingId && !shown.some((r) => r.id === renamingId)) { renamingId = ""; renameField = "title"; renameDraft = ""; }
+  for (const [key, rooms] of groups) {
+    ul.appendChild(buildGroupHead(key, rooms, marks));
+    if (collapsedGroups.has(key)) continue;
+    for (const r of rooms) {
+      const isAct = r.id === state.roomId;
+      const li = el("li", (isAct ? "active" : "") + (r.archived ? " archived" : ""));
+      if (renamingId === r.id) {
+        li.appendChild(buildRenameRow(r));
+        ul.appendChild(li);
+        continue;
+      }
+      // The whole row is the title: the mode is a 14px icon and the room actions open
+      // from the context menu (right-click, Shift+F10 or the menu key, long-press).
+      const btn = el("button", "room-item");
+      btn.type = "button";
+      btn.dataset.room = r.id;
+      if (isAct) btn.setAttribute("aria-current", "page");
+      btn.title = r.title + "\n" + ROOM_MODE[r.mode].name + " · 우클릭: 이름 바꾸기·삭제·내보내기";
+      btn.setAttribute("aria-description", ROOM_MODE[r.mode].name + ". Shift+F10으로 이름 바꾸기·삭제·내보내기 메뉴");
+      const icon = el("span", "mode-icon " + r.mode);
+      icon.innerHTML = ROOM_MODE[r.mode].icon;
+      icon.setAttribute("aria-hidden", "true");
+      btn.appendChild(icon);
+      btn.appendChild(el("span", "name", r.title));
+      const mark = marks[r.id];
+      if (mark) {
+        const label = mark === "active" ? "실행 중" : "안 읽은 답 있음";
+        const badge = el("span", mark === "active" ? "room-spin" : "dot");
+        badge.title = label;
+        badge.setAttribute("role", "img");
+        badge.setAttribute("aria-label", label);
+        btn.appendChild(badge);
+      }
+      btn.onclick = () => {
+        closeDrawers();
+        hooks.openRoom(r.id);
+      };
+      btn.oncontextmenu = (e) => {
         e.preventDefault();
         openRoomMenu(r.id);
+      };
+      // Not every browser turns Shift+F10 or the menu key into a contextmenu event.
+      btn.onkeydown = (e) => {
+        if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+          e.preventDefault();
+          openRoomMenu(r.id);
+        }
+      };
+      li.appendChild(btn);
+      if (menuOpenFor === r.id) {
+        li.dataset.menuOpen = "true";
+        li.appendChild(buildRoomMenu(r));
       }
-    };
-    li.appendChild(btn);
-    if (menuOpenFor === r.id) {
-      li.dataset.menuOpen = "true";
-      li.appendChild(buildRoomMenu(r));
+      ul.appendChild(li);
     }
-    ul.appendChild(li);
   }
 }
 

@@ -319,6 +319,8 @@ type RoomSummary struct {
 	Active    bool   `json:"active"`
 	Archived  bool   `json:"archived,omitempty"`
 	Asks      int    `json:"asks,omitempty"` // seat questions to the person still waiting or open (asks.go)
+	Workspace string `json:"workspace,omitempty"`
+	Group     string `json:"group,omitempty"`
 }
 
 func (h *Hub) Rooms() []RoomSummary {
@@ -333,7 +335,7 @@ func (h *Hub) Rooms() []RoomSummary {
 }
 
 func (rs *roomState) summary() RoomSummary {
-	return RoomSummary{ID: rs.room.ID, Title: rs.room.Title, UpdatedAt: rs.room.UpdatedAt, Mode: rs.room.Mode, Messages: len(rs.msgs), Active: len(rs.running) > 0 || len(rs.queue) > 0, Archived: rs.room.Archived, Asks: rs.openAsks}
+	return RoomSummary{ID: rs.room.ID, Title: rs.room.Title, UpdatedAt: rs.room.UpdatedAt, Mode: rs.room.Mode, Messages: len(rs.msgs), Active: len(rs.running) > 0 || len(rs.queue) > 0, Archived: rs.room.Archived, Asks: rs.openAsks, Workspace: rs.room.Workspace, Group: rs.room.Group}
 }
 
 func sortSummaries(s []RoomSummary) {
@@ -439,6 +441,7 @@ type RoomPatch struct {
 	CompactWindowTokens *int               `json:"compact_window_tokens,omitempty"`
 	QuietDone           *bool              `json:"quiet_done,omitempty"`
 	Archived            *bool              `json:"archived,omitempty"`
+	Group               *string            `json:"group,omitempty"`
 	Participants        []ParticipantPatch `json:"participants,omitempty"`
 }
 
@@ -542,6 +545,9 @@ func (h *Hub) UpdateRoom(id string, patch RoomPatch) ([]byte, error) {
 			return nil, fmt.Errorf("실행·대기 중인 턴이 있는 방은 보관할 수 없음")
 		}
 		next.Archived = *patch.Archived
+	}
+	if patch.Group != nil {
+		next.Group = strings.TrimSpace(*patch.Group)
 	}
 	patched := map[string]bool{}
 	for _, pp := range patch.Participants {
